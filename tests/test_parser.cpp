@@ -219,6 +219,153 @@ static int check_structure() {
     return failures;
 }
 
+static int check_query_metadata() {
+    int failures = 0;
+    auto require = [&](bool ok, const char* message) {
+        if (!ok) {
+            std::fprintf(stderr, "query metadata contract: %s\n", message);
+            ++failures;
+        }
+    };
+    const auto plan = showplan::parse_xml(R"xml(
+<ShowPlanXML><BatchSequence><Batch><Statements>
+  <StmtCond StatementId="1" StatementEstRows="12.5">
+    <StatementSetOptions ANSI_NULLS="true" ANSI_PADDING="false"
+      ANSI_WARNINGS="1" ARITHABORT="0" CONCAT_NULL_YIELDS_NULL="true"
+      NUMERIC_ROUNDABORT="false" QUOTED_IDENTIFIER="true"/>
+    <Condition><QueryPlan DegreeOfParallelism="8" MemoryGrant="4096">
+      <MemoryGrantInfo DesiredMemory="8192" GrantedMemory="4096" GrantWaitTime="3"
+        MaxUsedMemory="1024" RequestedMemory="6144" RequiredMemory="512"
+        SerialDesiredMemory="2048" SerialRequiredMemory="256"/>
+      <OptimizerHardwareDependentProperties EstimatedAvailableDegreeOfParallelism="16"
+        EstimatedAvailableMemoryGrant="65536" EstimatedPagesCached="1048576"/>
+      <ThreadStat Branches="2" UsedThreads="8">
+        <ThreadReservation NodeId="0" ReservedThreads="6"/>
+        <ThreadReservation NodeId="1" ReservedThreads="2"/>
+      </ThreadStat>
+      <RelOp NodeId="0" PhysicalOp="Constant Scan" EstimateRows="7"/>
+    </QueryPlan></Condition>
+    <Then><Statements>
+      <StmtSimple StatementId="2" StatementEstRows="0">
+        <StatementSetOptions ANSI_NULLS="false"/>
+        <QueryPlan DegreeOfParallelism="0" MemoryGrant="0">
+          <MemoryGrantInfo DesiredMemory="0" GrantedMemory="0" GrantWaitTime="0"
+            MaxUsedMemory="0" RequestedMemory="0" RequiredMemory="0"
+            SerialDesiredMemory="0" SerialRequiredMemory="0"/>
+          <OptimizerHardwareDependentProperties EstimatedAvailableDegreeOfParallelism="0"
+            EstimatedAvailableMemoryGrant="0" EstimatedPagesCached="0"/>
+          <ThreadStat Branches="0" UsedThreads="0">
+            <ThreadReservation NodeId="0" ReservedThreads="0"/>
+          </ThreadStat>
+        </QueryPlan>
+      </StmtSimple>
+    </Statements></Then>
+  </StmtCond>
+  <StmtSimple StatementId="3"><QueryPlan>
+    <RelOp NodeId="1" PhysicalOp="Constant Scan">
+      <QueryPlan DegreeOfParallelism="99" MemoryGrant="99">
+        <MemoryGrantInfo DesiredMemory="99"/>
+        <OptimizerHardwareDependentProperties EstimatedPagesCached="99"/>
+        <ThreadStat Branches="99"><ThreadReservation NodeId="99"/></ThreadStat>
+        <StatementSetOptions ANSI_NULLS="true"/>
+      </QueryPlan>
+    </RelOp>
+  </QueryPlan></StmtSimple>
+  <StmtSimple StatementId="4">
+    <StatementSetOptions QUOTED_IDENTIFIER="false"/>
+  </StmtSimple>
+  <StmtSimple StatementId="5"><QueryPlan>
+    <MemoryGrantInfo GrantedMemory="0"/>
+    <OptimizerHardwareDependentProperties EstimatedPagesCached="0"/>
+    <ThreadStat UsedThreads="0"><ThreadReservation ReservedThreads="0"/></ThreadStat>
+  </QueryPlan></StmtSimple>
+</Statements></Batch></BatchSequence></ShowPlanXML>)xml");
+    require(plan.statements.size() == 5, "nested operator metadata adds no statements");
+    if (plan.statements.size() != 5) return failures;
+    const auto& full = plan.statements[0];
+    require(full.est_rows == 12.5 && full.root && full.root->est_rows == 7 &&
+            full.degree_of_parallelism == 8 && full.memory_grant_kb == 4096,
+            "conditional owns statement estimates and its Condition/QueryPlan metadata");
+    const auto& grant = full.memory_grant;
+    require(grant.desired_memory_kb == 8192 && grant.granted_memory_kb == 4096 &&
+            grant.grant_wait_time_ms == 3 && grant.max_used_memory_kb == 1024 &&
+            grant.requested_memory_kb == 6144 && grant.required_memory_kb == 512 &&
+            grant.serial_desired_memory_kb == 2048 && grant.serial_required_memory_kb == 256,
+            "retain distinct memory grant quantities without conversion");
+    const auto& hardware = full.optimizer_hardware;
+    require(hardware.estimated_degree_of_parallelism == 16 &&
+            hardware.estimated_available_memory_grant_kb == 65536 &&
+            hardware.estimated_pages_cached == 1048576,
+            "retain optimizer hardware estimates separately from runtime grants");
+    const auto& threads = full.parallel_threads;
+    require(threads.branches == 2 && threads.used_threads == 8 &&
+            threads.reservations.size() == 2 &&
+            threads.reservations[0].node_id == 0 &&
+            threads.reservations[0].reserved_threads == 6 &&
+            threads.reservations[1].node_id == 1 &&
+            threads.reservations[1].reserved_threads == 2,
+            "retain every NUMA reservation with its owning node");
+    const auto& options = full.set_options;
+    require(options.ansi_nulls == true && options.ansi_padding == false &&
+            options.ansi_warnings == true && options.arithabort == false &&
+            options.concat_null_yields_null == true && options.numeric_roundabort == false &&
+            options.quoted_identifier == true, "capture true/false and numeric set options");
+    const auto& zero = plan.statements[1];
+    const auto& zg = zero.memory_grant;
+    require(zero.parent_statement_index == 0 && zero.est_rows == 0 &&
+            zero.degree_of_parallelism == 0 && zero.memory_grant_kb == 0 &&
+            zg.desired_memory_kb == 0 && zg.granted_memory_kb == 0 &&
+            zg.grant_wait_time_ms == 0 && zg.max_used_memory_kb == 0 &&
+            zg.requested_memory_kb == 0 && zg.required_memory_kb == 0 &&
+            zg.serial_desired_memory_kb == 0 && zg.serial_required_memory_kb == 0 &&
+            zero.optimizer_hardware.estimated_degree_of_parallelism == 0 &&
+            zero.optimizer_hardware.estimated_available_memory_grant_kb == 0 &&
+            zero.optimizer_hardware.estimated_pages_cached == 0 &&
+            zero.parallel_threads.branches == 0 && zero.parallel_threads.used_threads == 0 &&
+            zero.parallel_threads.reservations.size() == 1 &&
+            zero.parallel_threads.reservations[0].node_id == 0 &&
+            zero.parallel_threads.reservations[0].reserved_threads == 0,
+            "captured zeros remain known, not absent or inherited from enclosing statement");
+    require(zero.set_options.ansi_nulls == false && !zero.set_options.ansi_padding,
+            "captured false differs from absent without inheriting parent options");
+    const auto& absent = plan.statements[2];
+    const auto& ag = absent.memory_grant;
+    require(absent.est_rows == -1 && absent.degree_of_parallelism == -1 &&
+            absent.memory_grant_kb == -1 && ag.desired_memory_kb == -1 &&
+            ag.granted_memory_kb == -1 && ag.grant_wait_time_ms == -1 &&
+            ag.max_used_memory_kb == -1 && ag.requested_memory_kb == -1 &&
+            ag.required_memory_kb == -1 && ag.serial_desired_memory_kb == -1 &&
+            ag.serial_required_memory_kb == -1 &&
+            absent.optimizer_hardware.estimated_degree_of_parallelism == -1 &&
+            absent.optimizer_hardware.estimated_available_memory_grant_kb == -1 &&
+            absent.optimizer_hardware.estimated_pages_cached == -1 &&
+            absent.parallel_threads.branches == -1 &&
+            absent.parallel_threads.used_threads == -1 &&
+            absent.parallel_threads.reservations.empty(),
+            "missing metadata stays absent rather than borrowing nested or sibling values");
+    require(!absent.set_options.ansi_nulls && !absent.set_options.ansi_padding &&
+            !absent.set_options.ansi_warnings && !absent.set_options.arithabort &&
+            !absent.set_options.concat_null_yields_null &&
+            !absent.set_options.numeric_roundabort && !absent.set_options.quoted_identifier,
+            "missing set options remain disengaged");
+    require(!plan.statements[3].root &&
+            plan.statements[3].set_options.quoted_identifier == false &&
+            !plan.statements[3].set_options.ansi_nulls,
+            "set options do not require an operator query plan");
+    const auto& partial = plan.statements[4];
+    require(partial.memory_grant.granted_memory_kb == 0 &&
+            partial.memory_grant.desired_memory_kb == -1 &&
+            partial.optimizer_hardware.estimated_pages_cached == 0 &&
+            partial.optimizer_hardware.estimated_degree_of_parallelism == -1 &&
+            partial.parallel_threads.branches == -1 &&
+            partial.parallel_threads.used_threads == 0 &&
+            partial.parallel_threads.reservations.size() == 1 &&
+            partial.parallel_threads.reservations[0].node_id == -1 &&
+            partial.parallel_threads.reservations[0].reserved_threads == 0,
+            "partially supplied elements preserve absence at attribute level");
+    return failures;
+}
+
 static void dump_node(const showplan::PlanNode& n, int depth) {
     for (int i = 0; i < depth; ++i) std::printf("  ");
     std::printf("[%d] %s (%s)  est_rows=%.0f cost=%.4f",
@@ -242,6 +389,7 @@ int main(int argc, char** argv) {
 
     try {
         if (check_structure() != 0) return 1;
+        if (check_query_metadata() != 0) return 1;
     } catch (const showplan::ParseError& e) {
         std::fprintf(stderr, "statement contract parse failure: %s\n", e.what());
         return 1;

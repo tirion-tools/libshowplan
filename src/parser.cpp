@@ -40,6 +40,11 @@ bool attr_b(const pugi::xml_node& n, const char* name, bool def = false) {
     return v && (v[0] == '1' || v[0] == 't' || v[0] == 'T');
 }
 
+std::optional<bool> attr_optional_b(const pugi::xml_node& n, const char* name) {
+    if (!n.attribute(name)) return std::nullopt;
+    return attr_b(n, name);
+}
+
 std::string unbracket(std::string s) {
     if (s.size() >= 2 && s.front() == '[' && s.back() == ']') {
         return s.substr(1, s.size() - 2);
@@ -500,6 +505,7 @@ void parse_statement(const pugi::xml_node& stmt_xml, Statement& stmt,
     stmt.text = attr_s(stmt_xml, "StatementText");
     stmt.stmt_type = attr_s(stmt_xml, "StatementType");
     stmt.subtree_cost = attr_d(stmt_xml, "StatementSubTreeCost");
+    stmt.est_rows = attr_d(stmt_xml, "StatementEstRows", -1.0);
     stmt.optm_early_abort_reason =
         attr_s(stmt_xml, "StatementOptmEarlyAbortReason");
     stmt.optm_level = attr_s(stmt_xml, "StatementOptmLevel");
@@ -510,6 +516,18 @@ void parse_statement(const pugi::xml_node& stmt_xml, Statement& stmt,
     stmt.parent_object_id = attr_i(stmt_xml, "ParentObjectId", module_id);
     stmt.statement_start_offset = attr_i(stmt_xml, "StatementStartOffset", -1);
     stmt.statement_end_offset = attr_i(stmt_xml, "StatementEndOffset", -1);
+    if (auto options = stmt_xml.child("StatementSetOptions")) {
+        stmt.set_options.ansi_nulls = attr_optional_b(options, "ANSI_NULLS");
+        stmt.set_options.ansi_padding = attr_optional_b(options, "ANSI_PADDING");
+        stmt.set_options.ansi_warnings = attr_optional_b(options, "ANSI_WARNINGS");
+        stmt.set_options.arithabort = attr_optional_b(options, "ARITHABORT");
+        stmt.set_options.concat_null_yields_null =
+            attr_optional_b(options, "CONCAT_NULL_YIELDS_NULL");
+        stmt.set_options.numeric_roundabort =
+            attr_optional_b(options, "NUMERIC_ROUNDABORT");
+        stmt.set_options.quoted_identifier =
+            attr_optional_b(options, "QUOTED_IDENTIFIER");
+    }
 
     auto qp = stmt_xml.child("QueryPlan");
     if (!qp) qp = stmt_xml.child("Condition").child("QueryPlan");
@@ -519,6 +537,37 @@ void parse_statement(const pugi::xml_node& stmt_xml, Statement& stmt,
     stmt.compile_time_ms = static_cast<int>(attr_i(qp, "CompileTime"));
     stmt.compile_cpu_ms = static_cast<int>(attr_i(qp, "CompileCPU"));
     stmt.compile_memory_kb = static_cast<int>(attr_i(qp, "CompileMemory"));
+    stmt.degree_of_parallelism = attr_i(qp, "DegreeOfParallelism", -1);
+    stmt.memory_grant_kb = attr_i(qp, "MemoryGrant", -1);
+    if (auto grant = qp.child("MemoryGrantInfo")) {
+        stmt.memory_grant.desired_memory_kb = attr_i(grant, "DesiredMemory", -1);
+        stmt.memory_grant.granted_memory_kb = attr_i(grant, "GrantedMemory", -1);
+        stmt.memory_grant.grant_wait_time_ms = attr_i(grant, "GrantWaitTime", -1);
+        stmt.memory_grant.max_used_memory_kb = attr_i(grant, "MaxUsedMemory", -1);
+        stmt.memory_grant.requested_memory_kb = attr_i(grant, "RequestedMemory", -1);
+        stmt.memory_grant.required_memory_kb = attr_i(grant, "RequiredMemory", -1);
+        stmt.memory_grant.serial_desired_memory_kb =
+            attr_i(grant, "SerialDesiredMemory", -1);
+        stmt.memory_grant.serial_required_memory_kb =
+            attr_i(grant, "SerialRequiredMemory", -1);
+    }
+    if (auto hardware = qp.child("OptimizerHardwareDependentProperties")) {
+        stmt.optimizer_hardware.estimated_degree_of_parallelism =
+            attr_i(hardware, "EstimatedAvailableDegreeOfParallelism", -1);
+        stmt.optimizer_hardware.estimated_available_memory_grant_kb =
+            attr_i(hardware, "EstimatedAvailableMemoryGrant", -1);
+        stmt.optimizer_hardware.estimated_pages_cached =
+            attr_i(hardware, "EstimatedPagesCached", -1);
+    }
+    if (auto threads = qp.child("ThreadStat")) {
+        stmt.parallel_threads.branches = attr_i(threads, "Branches", -1);
+        stmt.parallel_threads.used_threads = attr_i(threads, "UsedThreads", -1);
+        for (auto reservation : threads.children("ThreadReservation")) {
+            stmt.parallel_threads.reservations.push_back({
+                attr_i(reservation, "NodeId", -1),
+                attr_i(reservation, "ReservedThreads", -1)});
+        }
+    }
     if (auto timing = qp.child("QueryTimeStats")) {
         stmt.query_cpu_ms = attr_i(timing, "CpuTime", -1);
         stmt.query_elapsed_ms = attr_i(timing, "ElapsedTime", -1);

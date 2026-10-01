@@ -46,7 +46,13 @@ try {
 - `StatementId`, `StatementText`, `StatementType`, `StatementSubTreeCost` are preserved when supplied. Costs and runtime are not borrowed from descendants.
 - `statement_start_offset` / `statement_end_offset` preserve `StatementStartOffset` / `StatementEndOffset` extensions when supplied; `-1` means absent. The public schema does not promise these attributes.
 - Conditional roots come from `Condition/QueryPlan`; cursor/receive operation roots stay on their individual operation rows. Operator XML is never traversed as statements. `root` may be null, and is a `shared_ptr<PlanNode>` so captured invocations can share an operator tree without copying it. Consumers must treat parsed trees as read-only.
-- `compile_time_ms`, `compile_cpu_ms`, `compile_memory_kb`, `cached_plan_size_kb` from `<QueryPlan>`
+- `compile_time_ms`, `compile_cpu_ms`, `compile_memory_kb`, `cached_plan_size_kb` from `<QueryPlan>`: times are milliseconds; compilation memory and cached plan size are KB. Existing absent-value defaults remain zero.
+- `est_rows` from `StatementEstRows`, independently of the root operator's estimate; `degree_of_parallelism` and `memory_grant_kb` from the owning `<QueryPlan>`'s `DegreeOfParallelism` and `MemoryGrant`.
+- `memory_grant` from the direct `<MemoryGrantInfo>` child: `desired_memory_kb`, `granted_memory_kb`, `grant_wait_time_ms`, `max_used_memory_kb`, `requested_memory_kb`, `required_memory_kb`, `serial_desired_memory_kb`, and `serial_required_memory_kb`. Memory values are KB and grant wait time is milliseconds.
+- `optimizer_hardware` from `<OptimizerHardwareDependentProperties>`: `estimated_degree_of_parallelism` (`EstimatedAvailableDegreeOfParallelism`), `estimated_available_memory_grant_kb` (`EstimatedAvailableMemoryGrant`, KB), and `estimated_pages_cached` (`EstimatedPagesCached`, a page count).
+- `parallel_threads` from `<ThreadStat>`: `branches`, `used_threads`, and every direct `<ThreadReservation>` as `node_id` / `reserved_threads`, retaining each NUMA node's reservation.
+- The estimate, parallelism, grant, optimizer-hardware, and thread metadata above use `-1` for absent values; captured zero remains zero. Each belongs only to its own statement/query plan, including `Condition/QueryPlan`, without borrowing nested operator or sibling metadata.
+- `set_options` from the statement's direct `<StatementSetOptions>` child, even without a query plan: `ansi_nulls`, `ansi_padding`, `ansi_warnings`, `arithabort`, `concat_null_yields_null`, `numeric_roundabort`, `quoted_identifier`. Each is `std::optional<bool>`: absent is disengaged, distinct from captured `false`. These and the other statement metadata copy by value; only the operator tree is shared.
 - `optm_early_abort_reason` (`TimeOut` / `MemoryLimitExceeded` / `GoodEnoughPlanFound` / empty)
 - `optm_level` (`TRIVIAL` / `FULL`)
 - `retrieved_from_cache` (default `true` when the attribute is absent)

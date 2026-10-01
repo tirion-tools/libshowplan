@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -118,6 +119,46 @@ struct Statistic {
     double sampling_percent = 0.0;
 };
 
+// Memory quantities are KB; wait time is milliseconds. -1 means absent.
+struct MemoryGrantInfo {
+    int64_t desired_memory_kb = -1;
+    int64_t granted_memory_kb = -1;
+    int64_t grant_wait_time_ms = -1;
+    int64_t max_used_memory_kb = -1;
+    int64_t requested_memory_kb = -1;
+    int64_t required_memory_kb = -1;
+    int64_t serial_desired_memory_kb = -1;
+    int64_t serial_required_memory_kb = -1;
+};
+
+struct OptimizerHardware {
+    int64_t estimated_degree_of_parallelism = -1;
+    int64_t estimated_available_memory_grant_kb = -1;
+    int64_t estimated_pages_cached = -1;
+};
+
+struct ThreadReservation {
+    int64_t node_id = -1;
+    int64_t reserved_threads = -1;
+};
+
+struct ParallelThreadUsage {
+    int64_t branches = -1;
+    int64_t used_threads = -1;
+    std::vector<ThreadReservation> reservations;
+};
+
+// Disengaged options were not supplied; false is a captured value.
+struct StatementSetOptions {
+    std::optional<bool> ansi_nulls;
+    std::optional<bool> ansi_padding;
+    std::optional<bool> ansi_warnings;
+    std::optional<bool> arithabort;
+    std::optional<bool> concat_null_yields_null;
+    std::optional<bool> numeric_roundabort;
+    std::optional<bool> quoted_identifier;
+};
+
 struct Statement {
     int statement_id = 0;
     // Index in Plan::statements of the nearest enclosing statement;
@@ -136,6 +177,14 @@ struct Statement {
     int compile_cpu_ms = 0;
     int compile_memory_kb = 0;
     int cached_plan_size_kb = 0;
+    // Optional statement/query-plan metadata: -1 means absent, zero is valid.
+    double est_rows = -1.0;
+    int64_t degree_of_parallelism = -1;
+    int64_t memory_grant_kb = -1;
+    MemoryGrantInfo memory_grant;
+    OptimizerHardware optimizer_hardware;
+    ParallelThreadUsage parallel_threads;
+    StatementSetOptions set_options;
     // QueryTimeStats uses milliseconds; -1 distinguishes missing from zero.
     int64_t query_cpu_ms = -1;
     int64_t query_elapsed_ms = -1;
