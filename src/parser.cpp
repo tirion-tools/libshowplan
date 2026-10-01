@@ -346,9 +346,8 @@ std::unique_ptr<PlanNode> parse_relop(const pugi::xml_node& relop) {
     } else {
         for (auto child : relop.children()) {
             if (child.type() != pugi::node_element) continue;
-            if (std::strcmp(child.name(), "RelOp") == 0) continue;
-            auto is_ix = child.child("IndexScan");
-            if (is_ix && attr_b(is_ix, "Lookup")) {
+            if (std::strcmp(child.name(), "IndexScan") == 0 &&
+                attr_b(child, "Lookup")) {
                 node->is_lookup = true;
                 break;
             }

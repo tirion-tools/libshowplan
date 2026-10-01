@@ -197,6 +197,25 @@ static int check_structure() {
                 udf.statements[2].parent_object_id == 20,
                 "honor explicit module identity extensions on procedure contexts");
     }
+    const auto lookup = showplan::parse_xml(R"xml(
+<ShowPlanXML><BatchSequence><Batch><Statements>
+  <StmtSimple StatementType="SELECT"><QueryPlan>
+    <RelOp NodeId="0" PhysicalOp="Nested Loops"><NestedLoops>
+      <RelOp NodeId="1" PhysicalOp="Index Seek">
+        <IndexScan Lookup="false"/>
+      </RelOp>
+      <RelOp NodeId="2" PhysicalOp="Clustered Index Seek">
+        <IndexScan Lookup="true"/>
+      </RelOp>
+    </NestedLoops></RelOp>
+  </QueryPlan></StmtSimple>
+</Statements></Batch></BatchSequence></ShowPlanXML>)xml");
+    const auto& join = *lookup.statements.at(0).root;
+    require(!join.is_lookup, "a child's lookup does not turn its parent into a lookup");
+    require(!join.children.at(0)->is_lookup, "ordinary index seek remains a seek");
+    require(join.children.at(1)->is_lookup &&
+            join.children.at(1)->physical_op == "Clustered Index Seek",
+            "IndexScan Lookup marks a key lookup without rewriting physical metadata");
     return failures;
 }
 

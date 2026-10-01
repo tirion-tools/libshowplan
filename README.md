@@ -53,7 +53,7 @@ try {
 - `parent_object_id`: supplied `ParentObjectId`, inherited through enclosing statement blocks when absent. Entering `<StoredProc>` or `<UDF>` starts a new module context rather than inheriting the caller's object ID. Explicit IDs on those contexts are honored, but `ProcName` alone cannot identify an object numerically: the [public ShowPlan schema](https://schemas.microsoft.com/sqlserver/2004/07/showplan/sql2022/showplanxml.xsd) does not define a `ProcID` attribute. `0` means no module identity was supplied, including ad-hoc batches. Operator `<Object>` IDs are not emitting-module IDs.
 
 ### Operator tree (`<RelOp>`)
-- `PhysicalOp`, `LogicalOp`, `parallel`, `is_lookup` (Key/RID Lookup)
+- `PhysicalOp`, `LogicalOp`, `parallel`, `is_lookup` (Key/RID Lookup, including a direct `IndexScan Lookup="true"` child without rewriting `PhysicalOp`)
 - Estimates: `est_rows`, `est_rows_per_exec`, `est_executions`, `est_row_size_bytes`, `est_io_cost`, `est_cpu_cost`, `est_op_cost`, `est_subtree_cost`
 - `execution_mode`: `Row` / `Batch` (Estimated or runtime variant)
 - `est_rows_to_be_read`: optimizer-projected SCAN rows (distinct from `est_rows` which is rows RETURNED)
