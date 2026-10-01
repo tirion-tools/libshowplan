@@ -495,7 +495,8 @@ void parse_statistics(const pugi::xml_node& qp, Statement& stmt) {
     }
 }
 
-void parse_statement(const pugi::xml_node& stmt_xml, Statement& stmt) {
+void parse_statement(const pugi::xml_node& stmt_xml, Statement& stmt,
+                     int64_t module_id) {
     stmt.statement_id = static_cast<int>(attr_i(stmt_xml, "StatementId"));
     stmt.text = attr_s(stmt_xml, "StatementText");
     stmt.stmt_type = attr_s(stmt_xml, "StatementType");
@@ -507,15 +508,24 @@ void parse_statement(const pugi::xml_node& stmt_xml, Statement& stmt) {
     if (auto a = stmt_xml.attribute("RetrievedFromCache")) {
         stmt.retrieved_from_cache = attr_b(stmt_xml, "RetrievedFromCache");
     }
-    stmt.parent_object_id = attr_i(stmt_xml, "ParentObjectId", 0);
+    stmt.parent_object_id = attr_i(stmt_xml, "ParentObjectId", module_id);
+    stmt.statement_start_offset = attr_i(stmt_xml, "StatementStartOffset", -1);
+    stmt.statement_end_offset = attr_i(stmt_xml, "StatementEndOffset", -1);
 
     auto qp = stmt_xml.child("QueryPlan");
+    if (!qp) qp = stmt_xml.child("Condition").child("QueryPlan");
     if (!qp) return;
 
     stmt.cached_plan_size_kb = static_cast<int>(attr_i(qp, "CachedPlanSize"));
     stmt.compile_time_ms = static_cast<int>(attr_i(qp, "CompileTime"));
     stmt.compile_cpu_ms = static_cast<int>(attr_i(qp, "CompileCPU"));
     stmt.compile_memory_kb = static_cast<int>(attr_i(qp, "CompileMemory"));
+    if (auto timing = qp.child("QueryTimeStats")) {
+        stmt.query_cpu_ms = attr_i(timing, "CpuTime", -1);
+        stmt.query_elapsed_ms = attr_i(timing, "ElapsedTime", -1);
+        stmt.query_udf_cpu_ms = attr_i(timing, "UdfCpuTime", -1);
+        stmt.query_udf_elapsed_ms = attr_i(timing, "UdfElapsedTime", -1);
+    }
 
     parse_missing_indexes(qp, stmt);
     parse_query_warnings(qp, stmt);
@@ -526,16 +536,56 @@ void parse_statement(const pugi::xml_node& stmt_xml, Statement& stmt) {
     if (root) stmt.root = parse_relop(root);
 }
 
-void walk_statements(const pugi::xml_node& container, Plan& plan) {
+bool is_statement(const pugi::xml_node& node) {
+    const char* name = node.name();
+    return std::strcmp(name, "StmtSimple") == 0 ||
+           std::strcmp(name, "StmtCond") == 0 ||
+           std::strcmp(name, "StmtCursor") == 0 ||
+           std::strcmp(name, "StmtReceive") == 0 ||
+           std::strcmp(name, "StmtUseDb") == 0;
+}
+
+void walk_statements(const pugi::xml_node& container, Plan& plan,
+                     int parent = -1, int64_t module_id = 0) {
     for (auto child : container.children()) {
         if (child.type() != pugi::node_element) continue;
         const char* name = child.name();
-        if (std::strcmp(name, "StmtSimple") == 0) {
+        // QueryPlan is parsed exactly once by its owning statement. In
+        // particular, an operator's Object is never a procedure context.
+        if (std::strcmp(name, "QueryPlan") == 0 ||
+            std::strcmp(name, "RelOp") == 0) continue;
+
+        const bool procedure = std::strcmp(name, "StoredProc") == 0 ||
+                               std::strcmp(name, "UDF") == 0;
+        const bool operation = std::strcmp(name, "Operation") == 0 &&
+            (std::strcmp(container.name(), "CursorPlan") == 0 ||
+             std::strcmp(container.name(), "ReceivePlan") == 0);
+        if (is_statement(child) || procedure || operation) {
             Statement stmt;
-            parse_statement(child, stmt);
+            // A call enters a new emitting module. ProcName is not an
+            // object ID, and the caller's module must not leak into it.
+            parse_statement(child, stmt, procedure ? 0 : module_id);
+            stmt.parent_statement_index = parent;
+            stmt.structural = std::strcmp(name, "StmtSimple") != 0 &&
+                              std::strcmp(name, "StmtUseDb") != 0;
+            if (child.child("StoredProc") || child.child("UDF"))
+                stmt.structural = true;
+            if (stmt.structural) {
+                if (stmt.stmt_type.empty()) stmt.stmt_type = name;
+                if (stmt.text.empty()) {
+                    if (procedure) stmt.text = attr_s(child, "ProcName");
+                    else if (operation) stmt.text = attr_s(child, "OperationType");
+                    if (stmt.text.empty()) stmt.text = stmt.stmt_type;
+                }
+            }
+            const int index = static_cast<int>(plan.statements.size());
+            const int64_t child_module = stmt.parent_object_id;
             plan.statements.push_back(std::move(stmt));
+            walk_statements(child, plan, index, child_module);
         } else {
-            walk_statements(child, plan);
+            // Statements, Then, Else and Condition are transparent XML
+            // blocks: ancestry follows statements, not SQL nest levels.
+            walk_statements(child, plan, parent, module_id);
         }
     }
 }

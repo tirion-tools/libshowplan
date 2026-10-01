@@ -6,7 +6,7 @@ Parses `.sqlplan` / `.queryplan` documents (Microsoft's public showplan schema) 
 
 ## Status
 
-1.0. Stable API.
+The parser retains the statement hierarchy as well as operator trees. Consumers that concatenate or reorder parsed statements must preserve their parent links.
 
 ## Build
 
@@ -29,7 +29,8 @@ target_link_libraries(myapp PRIVATE showplan::showplan)
 try {
     auto plan = showplan::parse_file("query.sqlplan");
     for (const auto& stmt : plan.statements) {
-        // walk stmt.root->children recursively
+        if (!stmt.root) continue; // structural and non-query statements
+        // walk stmt.root->children recursively (read-only)
     }
 } catch (const showplan::ParseError& e) {
     // bad XML, not a ShowPlanXML document, or I/O error
@@ -38,13 +39,18 @@ try {
 
 ## What's parsed
 
-### Statement (`<StmtSimple>`)
-- `StatementId`, `StatementText`, `StatementType`, `StatementSubTreeCost`
+### Statements and hierarchy
+- `Plan::statements` is preorder across batches. `parent_statement_index` is the nearest enclosing statement's index in that same vector, or `-1` for a batch-level row. It is independent of `StatementId` and SQL execution nest level. Rebase parent indexes when concatenating plans, and remap them when reordering.
+- Retains `<StmtSimple>`, `<StmtCond>`, `<StmtCursor>`, `<StmtReceive>`, and `<StmtUseDb>`, plus real `<StoredProc>` / `<UDF>` contexts and cursor/receive `<Operation>` rows. `<Statements>`, `<Then>`, `<Else>`, and `<Condition>` blocks preserve ancestry without introducing invented statements.
+- `structural` marks containers and procedure/operation rows. Labels preserve `StatementText`, falling back to `ProcName`, `OperationType`, or the XML statement type; the parser never manufactures `EXEC` text.
+- `StatementId`, `StatementText`, `StatementType`, `StatementSubTreeCost` are preserved when supplied. Costs and runtime are not borrowed from descendants.
+- `statement_start_offset` / `statement_end_offset` preserve `StatementStartOffset` / `StatementEndOffset` extensions when supplied; `-1` means absent. The public schema does not promise these attributes.
+- Conditional roots come from `Condition/QueryPlan`; cursor/receive operation roots stay on their individual operation rows. Operator XML is never traversed as statements. `root` may be null, and is a `shared_ptr<PlanNode>` so captured invocations can share an operator tree without copying it. Consumers must treat parsed trees as read-only.
 - `compile_time_ms`, `compile_cpu_ms`, `compile_memory_kb`, `cached_plan_size_kb` from `<QueryPlan>`
 - `optm_early_abort_reason` (`TimeOut` / `MemoryLimitExceeded` / `GoodEnoughPlanFound` / empty)
 - `optm_level` (`TRIVIAL` / `FULL`)
 - `retrieved_from_cache` (default `true` when the attribute is absent)
-- `parent_object_id`: `sys.objects.object_id` of the module the statement was emitted from. 0 = ad-hoc outer batch; non-zero values resolve to `schema.name` via `sys.objects` in your client. Drives the "at: \<object\>, Nest Level: N" call-chain header used by GUI tools.
+- `parent_object_id`: supplied `ParentObjectId`, inherited through enclosing statement blocks when absent. Entering `<StoredProc>` or `<UDF>` starts a new module context rather than inheriting the caller's object ID. Explicit IDs on those contexts are honored, but `ProcName` alone cannot identify an object numerically: the [public ShowPlan schema](https://schemas.microsoft.com/sqlserver/2004/07/showplan/sql2022/showplanxml.xsd) does not define a `ProcID` attribute. `0` means no module identity was supplied, including ad-hoc batches. Operator `<Object>` IDs are not emitting-module IDs.
 
 ### Operator tree (`<RelOp>`)
 - `PhysicalOp`, `LogicalOp`, `parallel`, `is_lookup` (Key/RID Lookup)

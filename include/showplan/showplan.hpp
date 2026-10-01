@@ -120,6 +120,15 @@ struct Statistic {
 
 struct Statement {
     int statement_id = 0;
+    // Index in Plan::statements of the nearest enclosing statement;
+    // -1 for a batch-level statement. Statements are stored in preorder.
+    int parent_statement_index = -1;
+    // Source byte offsets supplied by ShowPlan; -1 when absent.
+    int64_t statement_start_offset = -1;
+    int64_t statement_end_offset = -1;
+    // True for XML statement containers and procedure/cursor operations,
+    // which need not have an operator tree.
+    bool structural = false;
     std::string text;
     std::string stmt_type;
     double subtree_cost = 0.0;
@@ -127,6 +136,11 @@ struct Statement {
     int compile_cpu_ms = 0;
     int compile_memory_kb = 0;
     int cached_plan_size_kb = 0;
+    // QueryTimeStats uses milliseconds; -1 distinguishes missing from zero.
+    int64_t query_cpu_ms = -1;
+    int64_t query_elapsed_ms = -1;
+    int64_t query_udf_cpu_ms = -1;
+    int64_t query_udf_elapsed_ms = -1;
     // "TimeOut" / "MemoryLimitExceeded" → plan is likely suboptimal;
     // "GoodEnoughPlanFound" is benign; empty means full optimisation.
     std::string optm_early_abort_reason;
@@ -134,11 +148,13 @@ struct Statement {
     // Default true matches SQL Server's behaviour when the attribute
     // is absent.
     bool retrieved_from_cache = true;
-    // sys.objects.object_id of the emitting module. 0 = ad-hoc outer
-    // batch. Non-zero values resolve to schema.name via sys.objects
-    // in the client.
+    // sys.objects.object_id of the emitting module, inherited through
+    // enclosing statement blocks. StoredProc/UDF enters a new context;
+    // 0 means no module identity was supplied (including ad-hoc batches).
     int64_t parent_object_id = 0;
-    std::unique_ptr<PlanNode> root;
+    // Parsed operator trees may be shared by multiple captured invocations.
+    // Consumers must treat the tree as read-only after parsing.
+    std::shared_ptr<PlanNode> root;
     std::vector<MissingIndex> missing_indexes;
     std::vector<PlanWarning> warnings;
     std::vector<Parameter> parameters;
