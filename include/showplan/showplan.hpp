@@ -230,6 +230,12 @@ Plan parse_xml(std::string_view xml);
 // or parse failure.
 Plan parse_file(const std::string& path);
 
+// Append `block`'s statements to `into`, preserving order. The first
+// non-empty server_version / build wins; non-negative
+// parent_statement_index values are rebased by into's prior statement
+// count. source_path is left untouched.
+void append(Plan& into, Plan&& block);
+
 // Returns the most-referenced database name across all RelOps in the
 // plan, with surrounding [brackets] stripped. Empty if no table references.
 std::string predominant_database(const Plan& plan);

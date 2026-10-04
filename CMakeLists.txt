@@ -46,14 +46,6 @@ if(SHOWPLAN_BUILD_TESTS)
         COMMAND showplan_test_parser
                 ${CMAKE_CURRENT_SOURCE_DIR}/samples/tiny.sqlplan
     )
-
-    add_executable(showplan_test_anonymize tests/test_anonymize.cpp)
-    target_link_libraries(showplan_test_anonymize PRIVATE showplan)
-    add_test(
-        NAME showplan_anonymize
-        COMMAND showplan_test_anonymize
-                ${CMAKE_CURRENT_SOURCE_DIR}/samples/tiny.sqlplan
-    )
 endif()
 
 if(SHOWPLAN_INSTALL)

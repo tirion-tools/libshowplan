@@ -40,7 +40,7 @@ try {
 ## What's parsed
 
 ### Statements and hierarchy
-- `Plan::statements` is preorder across batches. `parent_statement_index` is the nearest enclosing statement's index in that same vector, or `-1` for a batch-level row. It is independent of `StatementId` and SQL execution nest level. Rebase parent indexes when concatenating plans, and remap them when reordering.
+- `Plan::statements` is preorder across batches. `parent_statement_index` is the nearest enclosing statement's index in that same vector, or `-1` for a batch-level row. It is independent of `StatementId` and SQL execution nest level. Concatenate plans with `showplan::append(into, std::move(block))`, which rebases parent indexes and keeps the first non-empty version/build; remap parents yourself when reordering.
 - Retains `<StmtSimple>`, `<StmtCond>`, `<StmtCursor>`, `<StmtReceive>`, and `<StmtUseDb>`, plus real `<StoredProc>` / `<UDF>` contexts and cursor/receive `<Operation>` rows. `<Statements>`, `<Then>`, `<Else>`, and `<Condition>` blocks preserve ancestry without introducing invented statements.
 - `structural` marks containers and procedure/operation rows. Labels preserve `StatementText`, falling back to `ProcName`, `OperationType`, or the XML statement type; the parser never manufactures `EXEC` text.
 - `StatementId`, `StatementText`, `StatementType`, `StatementSubTreeCost` are preserved when supplied. Costs and runtime are not borrowed from descendants.

@@ -693,6 +693,21 @@ Plan parse_file(const std::string& path) {
     return plan;
 }
 
+void append(Plan& into, Plan&& block) {
+    if (into.server_version.empty()) into.server_version = std::move(block.server_version);
+    if (into.build.empty()) into.build = std::move(block.build);
+    const int base = static_cast<int>(into.statements.size());
+    // Grow geometrically: an exact reserve here reallocates and moves every
+    // statement on each append, quadratic over a capture's snapshots.
+    const size_t needed = into.statements.size() + block.statements.size();
+    if (needed > into.statements.capacity())
+        into.statements.reserve(std::max(needed, into.statements.capacity() * 2));
+    for (auto& s : block.statements) {
+        if (s.parent_statement_index >= 0) s.parent_statement_index += base;
+        into.statements.push_back(std::move(s));
+    }
+}
+
 std::string predominant_database(const Plan& plan) {
     std::vector<std::pair<std::string, int>> counts;
     for (auto& s : plan.statements) collect_databases(s.root.get(), counts);

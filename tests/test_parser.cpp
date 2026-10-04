@@ -366,6 +366,49 @@ static int check_query_metadata() {
     return failures;
 }
 
+static int check_append() {
+    int failures = 0;
+    auto require = [&](bool ok, const char* message) {
+        if (!ok) {
+            std::fprintf(stderr, "append contract: %s\n", message);
+            ++failures;
+        }
+    };
+    const char* nested = R"xml(
+<ShowPlanXML Version="%s" Build="%s"><BatchSequence><Batch><Statements>
+  <StmtSimple StatementId="1" StatementText="EXEC p" StatementType="EXECUTE">
+    <StoredProc ProcName="[dbo].[p]"><Statements>
+      <StmtSimple StatementId="2" StatementText="SELECT 1" StatementType="SELECT"/>
+    </Statements></StoredProc>
+  </StmtSimple>
+</Statements></Batch></BatchSequence></ShowPlanXML>)xml";
+    char first[1024], second[1024];
+    std::snprintf(first, sizeof first, nested, "", "");
+    std::snprintf(second, sizeof second, nested, "1.5", "16.0.1");
+    char third[1024];
+    std::snprintf(third, sizeof third, nested, "9.9", "99");
+    showplan::Plan merged;
+    const auto block = showplan::parse_xml(first);
+    const size_t n = block.statements.size();
+    showplan::append(merged, showplan::parse_xml(first));
+    showplan::append(merged, showplan::parse_xml(second));
+    showplan::append(merged, showplan::parse_xml(third));
+    require(n >= 2 && block.statements[1].parent_statement_index == 0, "nested block shape");
+    require(merged.statements.size() == 3 * n, "all statements appended in order");
+    if (merged.statements.size() == 3 * n) {
+        for (size_t i = 0; i < merged.statements.size(); ++i) {
+            const int local = block.statements[i % n].parent_statement_index;
+            const int want = local < 0 ? -1 : local + static_cast<int>(i / n * n);
+            require(merged.statements[i].parent_statement_index == want &&
+                        merged.statements[i].text == block.statements[i % n].text,
+                    "parents rebased by prior statement count; -1 kept");
+        }
+    }
+    require(merged.server_version == "1.5" && merged.build == "16.0.1",
+            "first non-empty version and build win");
+    return failures;
+}
+
 static void dump_node(const showplan::PlanNode& n, int depth) {
     for (int i = 0; i < depth; ++i) std::printf("  ");
     std::printf("[%d] %s (%s)  est_rows=%.0f cost=%.4f",
@@ -390,6 +433,7 @@ int main(int argc, char** argv) {
     try {
         if (check_structure() != 0) return 1;
         if (check_query_metadata() != 0) return 1;
+        if (check_append() != 0) return 1;
     } catch (const showplan::ParseError& e) {
         std::fprintf(stderr, "statement contract parse failure: %s\n", e.what());
         return 1;
